@@ -7,14 +7,17 @@ import (
 	"strings"
 )
 
-// StdlibWriter implements io.Writer by invoking the stdlib log.Printf. It's
-// designed to be passed to a gokit logger as the writer, for cases where it's
-// desirable to pipe all log output to the same, canonical destination.
+// StdlibWriter implements io.Writer by invoking the stdlib log.Print. It's
+// designed to be passed to a Go kit logger as the writer, for cases where
+// it's necessary to redirect all Go kit log output to the stdlib logger.
+//
+// If you have any choice in the matter, you shouldn't use this. Prefer to
+// redirect the stdlib log to the Go kit logger via NewStdlibAdapter.
 type StdlibWriter struct{}
 
 // Write implements io.Writer.
 func (w StdlibWriter) Write(p []byte) (int, error) {
-	log.Printf(strings.TrimSpace(string(p)))
+	log.Print(strings.TrimSpace(string(p)))
 	return len(p), nil
 }
 
@@ -92,7 +95,7 @@ func (a StdlibAdapter) Write(p []byte) (int, error) {
 const (
 	logRegexpDate = `(?P<date>[0-9]{4}/[0-9]{2}/[0-9]{2})?[ ]?`
 	logRegexpTime = `(?P<time>[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?)?[ ]?`
-	logRegexpFile = `(?P<file>[^:]+:[0-9]+)?`
+	logRegexpFile = `(?P<file>.+?:[0-9]+)?`
 	logRegexpMsg  = `(: )?(?P<msg>.*)`
 )
 

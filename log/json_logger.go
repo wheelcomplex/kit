@@ -1,9 +1,11 @@
 package log
 
 import (
+	"encoding"
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
 )
 
 type jsonLogger struct {
@@ -17,29 +19,72 @@ func NewJSONLogger(w io.Writer) Logger {
 }
 
 func (l *jsonLogger) Log(keyvals ...interface{}) error {
-	if len(keyvals)%2 == 1 {
-		panic("odd number of keyvals")
-	}
-	m := make(map[string]interface{}, len(keyvals)/2)
+	n := (len(keyvals) + 1) / 2 // +1 to handle case when len is odd
+	m := make(map[string]interface{}, n)
 	for i := 0; i < len(keyvals); i += 2 {
-		merge(m, keyvals[i], keyvals[i+1])
+		k := keyvals[i]
+		var v interface{} = ErrMissingValue
+		if i+1 < len(keyvals) {
+			v = keyvals[i+1]
+		}
+		merge(m, k, v)
 	}
 	return json.NewEncoder(l.Writer).Encode(m)
 }
 
-func merge(dst map[string]interface{}, k, v interface{}) map[string]interface{} {
+func merge(dst map[string]interface{}, k, v interface{}) {
 	var key string
 	switch x := k.(type) {
 	case string:
 		key = x
 	case fmt.Stringer:
-		key = x.String()
+		key = safeString(x)
 	default:
-		key = fmt.Sprintf("%v", x)
+		key = fmt.Sprint(x)
 	}
 	if x, ok := v.(error); ok {
-		v = x.Error()
+		v = safeError(x)
 	}
+
+	// We want json.Marshaler and encoding.TextMarshaller to take priority over
+	// err.Error() and v.String(). But json.Marshall (called later) does that by
+	// default so we force a no-op if it's one of those 2 case.
+	switch x := v.(type) {
+	case json.Marshaler:
+	case encoding.TextMarshaler:
+	case error:
+		v = safeError(x)
+	case fmt.Stringer:
+		v = safeString(x)
+	}
+
 	dst[key] = v
-	return dst
+}
+
+func safeString(str fmt.Stringer) (s string) {
+	defer func() {
+		if panicVal := recover(); panicVal != nil {
+			if v := reflect.ValueOf(str); v.Kind() == reflect.Ptr && v.IsNil() {
+				s = "NULL"
+			} else {
+				panic(panicVal)
+			}
+		}
+	}()
+	s = str.String()
+	return
+}
+
+func safeError(err error) (s interface{}) {
+	defer func() {
+		if panicVal := recover(); panicVal != nil {
+			if v := reflect.ValueOf(err); v.Kind() == reflect.Ptr && v.IsNil() {
+				s = nil
+			} else {
+				panic(panicVal)
+			}
+		}
+	}()
+	s = err.Error()
+	return
 }

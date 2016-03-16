@@ -11,7 +11,8 @@ import (
 func TestStdlibWriter(t *testing.T) {
 	buf := &bytes.Buffer{}
 	log.SetOutput(buf)
-	logger := NewPrefixLogger(StdlibWriter{})
+	log.SetFlags(log.LstdFlags)
+	logger := NewLogfmtLogger(StdlibWriter{})
 	logger.Log("key", "val")
 	timestamp := time.Now().Format("2006/01/02 15:04:05")
 	if want, have := timestamp+" key=val\n", buf.String(); want != have {
@@ -21,9 +22,9 @@ func TestStdlibWriter(t *testing.T) {
 
 func TestStdlibAdapterUsage(t *testing.T) {
 	buf := &bytes.Buffer{}
-	logger := NewPrefixLogger(buf)
+	logger := NewLogfmtLogger(buf)
 	writer := NewStdlibAdapter(logger)
-	log.SetOutput(writer)
+	stdlog := log.New(writer, "", 0)
 
 	now := time.Now()
 	date := now.Format("2006/01/02")
@@ -33,14 +34,14 @@ func TestStdlibAdapterUsage(t *testing.T) {
 		0:                                      "msg=hello\n",
 		log.Ldate:                              "ts=" + date + " msg=hello\n",
 		log.Ltime:                              "ts=" + time + " msg=hello\n",
-		log.Ldate | log.Ltime:                  "ts=" + date + " " + time + " msg=hello\n",
-		log.Lshortfile:                         "file=stdlib_test.go:43 msg=hello\n",
-		log.Lshortfile | log.Ldate:             "ts=" + date + " file=stdlib_test.go:43 msg=hello\n",
-		log.Lshortfile | log.Ldate | log.Ltime: "ts=" + date + " " + time + " file=stdlib_test.go:43 msg=hello\n",
+		log.Ldate | log.Ltime:                  "ts=\"" + date + " " + time + "\" msg=hello\n",
+		log.Lshortfile:                         "file=stdlib_test.go:44 msg=hello\n",
+		log.Lshortfile | log.Ldate:             "ts=" + date + " file=stdlib_test.go:44 msg=hello\n",
+		log.Lshortfile | log.Ldate | log.Ltime: "ts=\"" + date + " " + time + "\" file=stdlib_test.go:44 msg=hello\n",
 	} {
 		buf.Reset()
-		log.SetFlags(flag)
-		log.Print("hello")
+		stdlog.SetFlags(flag)
+		stdlog.Print("hello")
 		if have := buf.String(); want != have {
 			t.Errorf("flag=%d: want %#v, have %#v", flag, want, have)
 		}
@@ -49,22 +50,22 @@ func TestStdlibAdapterUsage(t *testing.T) {
 
 func TestStdLibAdapterExtraction(t *testing.T) {
 	buf := &bytes.Buffer{}
-	logger := NewPrefixLogger(buf)
+	logger := NewLogfmtLogger(buf)
 	writer := NewStdlibAdapter(logger)
 	for input, want := range map[string]string{
 		"hello":                                            "msg=hello\n",
 		"2009/01/23: hello":                                "ts=2009/01/23 msg=hello\n",
-		"2009/01/23 01:23:23: hello":                       "ts=2009/01/23 01:23:23 msg=hello\n",
+		"2009/01/23 01:23:23: hello":                       "ts=\"2009/01/23 01:23:23\" msg=hello\n",
 		"01:23:23: hello":                                  "ts=01:23:23 msg=hello\n",
-		"2009/01/23 01:23:23.123123: hello":                "ts=2009/01/23 01:23:23.123123 msg=hello\n",
-		"2009/01/23 01:23:23.123123 /a/b/c/d.go:23: hello": "ts=2009/01/23 01:23:23.123123 file=/a/b/c/d.go:23 msg=hello\n",
+		"2009/01/23 01:23:23.123123: hello":                "ts=\"2009/01/23 01:23:23.123123\" msg=hello\n",
+		"2009/01/23 01:23:23.123123 /a/b/c/d.go:23: hello": "ts=\"2009/01/23 01:23:23.123123\" file=/a/b/c/d.go:23 msg=hello\n",
 		"01:23:23.123123 /a/b/c/d.go:23: hello":            "ts=01:23:23.123123 file=/a/b/c/d.go:23 msg=hello\n",
-		"2009/01/23 01:23:23 /a/b/c/d.go:23: hello":        "ts=2009/01/23 01:23:23 file=/a/b/c/d.go:23 msg=hello\n",
+		"2009/01/23 01:23:23 /a/b/c/d.go:23: hello":        "ts=\"2009/01/23 01:23:23\" file=/a/b/c/d.go:23 msg=hello\n",
 		"2009/01/23 /a/b/c/d.go:23: hello":                 "ts=2009/01/23 file=/a/b/c/d.go:23 msg=hello\n",
 		"/a/b/c/d.go:23: hello":                            "file=/a/b/c/d.go:23 msg=hello\n",
 	} {
 		buf.Reset()
-		fmt.Fprintf(writer, input)
+		fmt.Fprint(writer, input)
 		if have := buf.String(); want != have {
 			t.Errorf("%q: want %#v, have %#v", input, want, have)
 		}
@@ -73,65 +74,125 @@ func TestStdLibAdapterExtraction(t *testing.T) {
 
 func TestStdlibAdapterSubexps(t *testing.T) {
 	for input, wantMap := range map[string]map[string]string{
-		"hello world": map[string]string{
+		"hello world": {
 			"date": "",
 			"time": "",
 			"file": "",
 			"msg":  "hello world",
 		},
-		"2009/01/23: hello world": map[string]string{
+		"2009/01/23: hello world": {
 			"date": "2009/01/23",
 			"time": "",
 			"file": "",
 			"msg":  "hello world",
 		},
-		"2009/01/23 01:23:23: hello world": map[string]string{
+		"2009/01/23 01:23:23: hello world": {
 			"date": "2009/01/23",
 			"time": "01:23:23",
 			"file": "",
 			"msg":  "hello world",
 		},
-		"01:23:23: hello world": map[string]string{
+		"01:23:23: hello world": {
 			"date": "",
 			"time": "01:23:23",
 			"file": "",
 			"msg":  "hello world",
 		},
-		"2009/01/23 01:23:23.123123: hello world": map[string]string{
+		"2009/01/23 01:23:23.123123: hello world": {
 			"date": "2009/01/23",
 			"time": "01:23:23.123123",
 			"file": "",
 			"msg":  "hello world",
 		},
-		"2009/01/23 01:23:23.123123 /a/b/c/d.go:23: hello world": map[string]string{
+		"2009/01/23 01:23:23.123123 /a/b/c/d.go:23: hello world": {
 			"date": "2009/01/23",
 			"time": "01:23:23.123123",
 			"file": "/a/b/c/d.go:23",
 			"msg":  "hello world",
 		},
-		"01:23:23.123123 /a/b/c/d.go:23: hello world": map[string]string{
+		"01:23:23.123123 /a/b/c/d.go:23: hello world": {
 			"date": "",
 			"time": "01:23:23.123123",
 			"file": "/a/b/c/d.go:23",
 			"msg":  "hello world",
 		},
-		"2009/01/23 01:23:23 /a/b/c/d.go:23: hello world": map[string]string{
+		"2009/01/23 01:23:23 /a/b/c/d.go:23: hello world": {
 			"date": "2009/01/23",
 			"time": "01:23:23",
 			"file": "/a/b/c/d.go:23",
 			"msg":  "hello world",
 		},
-		"2009/01/23 /a/b/c/d.go:23: hello world": map[string]string{
+		"2009/01/23 /a/b/c/d.go:23: hello world": {
 			"date": "2009/01/23",
 			"time": "",
 			"file": "/a/b/c/d.go:23",
 			"msg":  "hello world",
 		},
-		"/a/b/c/d.go:23: hello world": map[string]string{
+		"/a/b/c/d.go:23: hello world": {
 			"date": "",
 			"time": "",
 			"file": "/a/b/c/d.go:23",
 			"msg":  "hello world",
+		},
+		"2009/01/23 01:23:23.123123 C:/a/b/c/d.go:23: hello world": {
+			"date": "2009/01/23",
+			"time": "01:23:23.123123",
+			"file": "C:/a/b/c/d.go:23",
+			"msg":  "hello world",
+		},
+		"01:23:23.123123 C:/a/b/c/d.go:23: hello world": {
+			"date": "",
+			"time": "01:23:23.123123",
+			"file": "C:/a/b/c/d.go:23",
+			"msg":  "hello world",
+		},
+		"2009/01/23 01:23:23 C:/a/b/c/d.go:23: hello world": {
+			"date": "2009/01/23",
+			"time": "01:23:23",
+			"file": "C:/a/b/c/d.go:23",
+			"msg":  "hello world",
+		},
+		"2009/01/23 C:/a/b/c/d.go:23: hello world": {
+			"date": "2009/01/23",
+			"time": "",
+			"file": "C:/a/b/c/d.go:23",
+			"msg":  "hello world",
+		},
+		"C:/a/b/c/d.go:23: hello world": {
+			"date": "",
+			"time": "",
+			"file": "C:/a/b/c/d.go:23",
+			"msg":  "hello world",
+		},
+		"2009/01/23 01:23:23.123123 C:/a/b/c/d.go:23: :.;<>_#{[]}\"\\": {
+			"date": "2009/01/23",
+			"time": "01:23:23.123123",
+			"file": "C:/a/b/c/d.go:23",
+			"msg":  ":.;<>_#{[]}\"\\",
+		},
+		"01:23:23.123123 C:/a/b/c/d.go:23: :.;<>_#{[]}\"\\": {
+			"date": "",
+			"time": "01:23:23.123123",
+			"file": "C:/a/b/c/d.go:23",
+			"msg":  ":.;<>_#{[]}\"\\",
+		},
+		"2009/01/23 01:23:23 C:/a/b/c/d.go:23: :.;<>_#{[]}\"\\": {
+			"date": "2009/01/23",
+			"time": "01:23:23",
+			"file": "C:/a/b/c/d.go:23",
+			"msg":  ":.;<>_#{[]}\"\\",
+		},
+		"2009/01/23 C:/a/b/c/d.go:23: :.;<>_#{[]}\"\\": {
+			"date": "2009/01/23",
+			"time": "",
+			"file": "C:/a/b/c/d.go:23",
+			"msg":  ":.;<>_#{[]}\"\\",
+		},
+		"C:/a/b/c/d.go:23: :.;<>_#{[]}\"\\": {
+			"date": "",
+			"time": "",
+			"file": "C:/a/b/c/d.go:23",
+			"msg":  ":.;<>_#{[]}\"\\",
 		},
 	} {
 		haveMap := subexps([]byte(input))

@@ -21,13 +21,14 @@ func TestScribeCollector(t *testing.T) {
 
 	timeout := time.Second
 	batchInterval := time.Millisecond
-	c, err := zipkin.NewScribeCollector(server.addr(), timeout, 0, batchInterval)
+	c, err := zipkin.NewScribeCollector(server.addr(), timeout, zipkin.ScribeBatchSize(0), zipkin.ScribeBatchInterval(batchInterval))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	var (
-		name         = "span-name"
+		serviceName  = "service"
+		methodName   = "method"
 		traceID      = int64(123)
 		spanID       = int64(456)
 		parentSpanID = int64(0)
@@ -35,7 +36,7 @@ func TestScribeCollector(t *testing.T) {
 		duration     = 42 * time.Millisecond
 	)
 
-	span := zipkin.NewSpan("some-host", name, traceID, spanID, parentSpanID)
+	span := zipkin.NewSpan("1.2.3.4:1234", serviceName, methodName, traceID, spanID, parentSpanID)
 	span.AnnotateDuration("foo", 42*time.Millisecond)
 	if err := c.Collect(span); err != nil {
 		t.Errorf("error during collection: %v", err)
@@ -58,7 +59,7 @@ func TestScribeCollector(t *testing.T) {
 	}
 
 	gotSpan := server.spans()[0]
-	if want, have := name, gotSpan.GetName(); want != have {
+	if want, have := methodName, gotSpan.GetName(); want != have {
 		t.Errorf("want %q, have %q", want, have)
 	}
 	if want, have := traceID, gotSpan.GetTraceId(); want != have {

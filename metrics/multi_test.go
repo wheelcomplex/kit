@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"math"
-	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -18,10 +17,12 @@ import (
 	"github.com/go-kit/kit/metrics"
 	"github.com/go-kit/kit/metrics/expvar"
 	"github.com/go-kit/kit/metrics/prometheus"
+	"github.com/go-kit/kit/metrics/teststat"
 )
 
 func TestMultiWith(t *testing.T) {
 	c := metrics.NewMultiCounter(
+		"multifoo",
 		expvar.NewCounter("foo"),
 		prometheus.NewCounter(stdprometheus.CounterOpts{
 			Namespace: "test",
@@ -47,14 +48,15 @@ func TestMultiWith(t *testing.T) {
 
 func TestMultiCounter(t *testing.T) {
 	metrics.NewMultiCounter(
+		"multialpha",
 		expvar.NewCounter("alpha"),
 		prometheus.NewCounter(stdprometheus.CounterOpts{
 			Namespace: "test",
 			Subsystem: "multi_counter",
 			Name:      "beta",
 			Help:      "Beta counter.",
-		}, []string{}),
-	).Add(123)
+		}, []string{"a"}),
+	).With(metrics.Field{Key: "a", Value: "b"}).Add(123)
 
 	if want, have := "123", stdexpvar.Get("alpha").String(); want != have {
 		t.Errorf("expvar: want %q, have %q", want, have)
@@ -63,7 +65,7 @@ func TestMultiCounter(t *testing.T) {
 	if want, have := strings.Join([]string{
 		`# HELP test_multi_counter_beta Beta counter.`,
 		`# TYPE test_multi_counter_beta counter`,
-		`test_multi_counter_beta 123`,
+		`test_multi_counter_beta{a="b"} 123`,
 	}, "\n"), scrapePrometheus(t); !strings.Contains(have, want) {
 		t.Errorf("Prometheus metric stanza not found or incorrect\n%s", have)
 	}
@@ -71,16 +73,18 @@ func TestMultiCounter(t *testing.T) {
 
 func TestMultiGauge(t *testing.T) {
 	g := metrics.NewMultiGauge(
+		"multidelta",
 		expvar.NewGauge("delta"),
 		prometheus.NewGauge(stdprometheus.GaugeOpts{
 			Namespace: "test",
 			Subsystem: "multi_gauge",
 			Name:      "kappa",
 			Help:      "Kappa gauge.",
-		}, []string{}),
+		}, []string{"a"}),
 	)
 
-	g.Set(34)
+	f := metrics.Field{Key: "a", Value: "aaa"}
+	g.With(f).Set(34)
 
 	if want, have := "34", stdexpvar.Get("delta").String(); want != have {
 		t.Errorf("expvar: want %q, have %q", want, have)
@@ -88,12 +92,12 @@ func TestMultiGauge(t *testing.T) {
 	if want, have := strings.Join([]string{
 		`# HELP test_multi_gauge_kappa Kappa gauge.`,
 		`# TYPE test_multi_gauge_kappa gauge`,
-		`test_multi_gauge_kappa 34`,
+		`test_multi_gauge_kappa{a="aaa"} 34`,
 	}, "\n"), scrapePrometheus(t); !strings.Contains(have, want) {
 		t.Errorf("Prometheus metric stanza not found or incorrect\n%s", have)
 	}
 
-	g.Add(-40)
+	g.With(f).Add(-40)
 
 	if want, have := "-6", stdexpvar.Get("delta").String(); want != have {
 		t.Errorf("expvar: want %q, have %q", want, have)
@@ -101,7 +105,7 @@ func TestMultiGauge(t *testing.T) {
 	if want, have := strings.Join([]string{
 		`# HELP test_multi_gauge_kappa Kappa gauge.`,
 		`# TYPE test_multi_gauge_kappa gauge`,
-		`test_multi_gauge_kappa -6`,
+		`test_multi_gauge_kappa{a="aaa"} -6`,
 	}, "\n"), scrapePrometheus(t); !strings.Contains(have, want) {
 		t.Errorf("Prometheus metric stanza not found or incorrect\n%s", have)
 	}
@@ -110,6 +114,7 @@ func TestMultiGauge(t *testing.T) {
 func TestMultiHistogram(t *testing.T) {
 	quantiles := []int{50, 90, 99}
 	h := metrics.NewMultiHistogram(
+		"multiomicron",
 		expvar.NewHistogram("omicron", 0, 100, 3, quantiles...),
 		prometheus.NewSummary(stdprometheus.SummaryOpts{
 			Namespace: "test",
@@ -120,17 +125,9 @@ func TestMultiHistogram(t *testing.T) {
 	)
 
 	const seed, mean, stdev int64 = 123, 50, 10
-	populateNormalHistogram(t, h, seed, mean, stdev)
+	teststat.PopulateNormalHistogram(t, h, seed, mean, stdev)
 	assertExpvarNormalHistogram(t, "omicron", mean, stdev, quantiles)
-	assertPrometheusNormalHistogram(t, "test_multi_histogram_nu", mean, stdev)
-}
-
-func populateNormalHistogram(t *testing.T, h metrics.Histogram, seed int64, mean, stdev int64) {
-	rand.Seed(seed)
-	for i := 0; i < 1234; i++ {
-		sample := int64(rand.NormFloat64()*float64(stdev) + float64(mean))
-		h.Observe(sample)
-	}
+	assertPrometheusNormalHistogram(t, `test_multi_histogram_nu`, mean, stdev)
 }
 
 func assertExpvarNormalHistogram(t *testing.T, metricName string, mean, stdev int64, quantiles []int) {
@@ -220,12 +217,13 @@ func scrapePrometheus(t *testing.T) string {
 }
 
 func getPrometheusQuantile(t *testing.T, scrape, name, quantileStr string) int {
-	matches := regexp.MustCompile(name+`{quantile="`+quantileStr+`"} ([0-9]+)`).FindAllStringSubmatch(scrape, -1)
+	re := name + `{quantile="` + quantileStr + `"} ([0-9]+)`
+	matches := regexp.MustCompile(re).FindAllStringSubmatch(scrape, -1)
 	if len(matches) < 1 {
-		t.Fatalf("%q: quantile %q not found in scrape", name, quantileStr)
+		t.Fatalf("%q: quantile %q not found in scrape (%s)", name, quantileStr, re)
 	}
 	if len(matches[0]) < 2 {
-		t.Fatalf("%q: quantile %q not found in scrape", name, quantileStr)
+		t.Fatalf("%q: quantile %q not found in scrape (%s)", name, quantileStr, re)
 	}
 	i, err := strconv.Atoi(matches[0][1])
 	if err != nil {
